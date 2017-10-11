@@ -1,10 +1,16 @@
+'use strict'
+
 var kill = require('tree-kill')
 var resolve = require('path').resolve
 var exec = require('child_process').exec
 var spawn = require('cross-spawn').spawn
 var chokidar = require('chokidar')
 var arrify = require('arrify')
+var throttle = require('lodash.throttle')
+
 var echo = process.execPath + ' ' + resolve(__dirname, 'echo.js')
+
+var killRetryDelay = 500
 
 module.exports = function (match, command, args, opts) {
   opts = opts || {}
@@ -12,10 +18,11 @@ module.exports = function (match, command, args, opts) {
   var matches = arrify(match)
   var initial = !!opts.initial
   var wait = !!opts.wait
-  var cwd = opts.cwd ? resolve(opts.cwd) : process.cwd()
+    var cwd = opts.cwd ? resolve(opts.cwd) : process.cwd()
   var stdout = opts.stdout || process.stdout
   var stderr = opts.stderr || process.stderr
   var delay = Number(opts.delay) || 0
+  var killRetry = Number(opts.killRetry) || 0
   var killSignal = opts.killSignal || 'SIGTERM'
   var outpipe = typeof opts.outpipe === 'string' ? outpipetmpl(opts.outpipe) : undefined
 
@@ -27,7 +34,9 @@ module.exports = function (match, command, args, opts) {
   var childCommand
   var pendingOpts
   var pendingTimeout
+  var exitTimeout
   var pendingExit = false
+  var killRetries
 
   // Convert arguments to templates
   var tmpls = args ? args.map(tmpl) : []
@@ -78,30 +87,45 @@ module.exports = function (match, command, args, opts) {
     return start(args)
   }
 
+  function killTask(retryNumber) {
+    retryNumber = retryNumber || 0
+
+    if (childCommand) {
+      log('killing command ' + childCommand.pid + ' and restarting')
+      kill(childCommand.pid, killSignal)
+    }
+
+    if (childOutpipe) {
+      log('killing outpipe ' + childOutpipe.pid + ' and restarting')
+      killTask(childOutpipe.pid, killSignal)
+    }
+
+    if (killRetry && retryNumber < killRetry) {
+      retryNumber++
+      exitTimeout = setTimeout(function() {
+        if (!pendingExit) return;
+        log("process hasn't exited, retry #" + retryNumber)
+
+        killTask(retryNumber);
+      }, killRetryDelay * (retryNumber))
+    }
+  }
   /**
    * Start the script.
    */
   function start (opts) {
+
     // Set pending options for next execution.
     if (childOutpipe || childCommand) {
       pendingOpts = opts
 
       if (!pendingExit) {
+        pendingExit = true
         if (wait) {
           log('waiting for process and restarting')
         } else {
-          if (childCommand) {
-            log('killing command ' + childCommand.pid + ' and restarting')
-            kill(childCommand.pid, killSignal)
-          }
-
-          if (childOutpipe) {
-            log('killing outpipe ' + childOutpipe.pid + ' and restarting')
-            kill(childOutpipe.pid, killSignal)
-          }
+          killTask()
         }
-
-        pendingExit = true
       }
     }
 
@@ -123,6 +147,10 @@ module.exports = function (match, command, args, opts) {
       childOutpipe.stderr.pipe(stderr)
 
       childOutpipe.on('exit', function (code, signal) {
+        if (exitTimeout) {
+          clearTimeout(exitTimeout)
+        }
+
         log('outpipe ' + (code == null ? 'exited with ' + signal : 'completed with code ' + code))
 
         childOutpipe = null
@@ -157,6 +185,8 @@ module.exports = function (match, command, args, opts) {
     }
   }
 
+    var startThrottled = delay ? throttle(start, delay) : start
+
   watcher.on('ready', function () {
     log('watching ' + matches.join(', '))
 
@@ -171,7 +201,7 @@ module.exports = function (match, command, args, opts) {
       // Log the event and the file affected
       log(event + ' to ' + changed)
 
-      start({ event: event, changed: changed })
+      startThrottled({ event: event, changed: changed })
     })
   })
 
