@@ -67,13 +67,7 @@ module.exports = function (match, command, args, opts) {
         clearTimeout(pendingTimeout)
       }
 
-      if (delay > 0) {
-        pendingTimeout = setTimeout(function () {
-          cleanstart(pendingOpts)
-        }, delay)
-      } else {
-        cleanstart(pendingOpts)
-      }
+      cleanstart(pendingOpts)
     }
   }
 
@@ -100,14 +94,19 @@ module.exports = function (match, command, args, opts) {
       killTask(childOutpipe.pid, killSignal)
     }
 
-    if (killRetry && retryNumber < killRetry) {
-      retryNumber++
-      exitTimeout = setTimeout(function() {
-        if (!pendingExit) return;
-        log("process hasn't exited, retry #" + retryNumber)
+    if (killRetry) {
+      if (retryNumber < killRetry) {
+        retryNumber++
+        exitTimeout = setTimeout(function() {
+          if (!pendingExit) return;
+          log("process hasn't exited, retry #" + retryNumber)
 
-        killTask(retryNumber);
-      }, killRetryDelay * (retryNumber))
+          killTask(retryNumber);
+        }, killRetryDelay * (retryNumber))
+      } else {
+        log('process did not exit after ' + killRetry + ' retries; not restarting.')
+        pendingExit = false
+      }
     }
   }
   /**
