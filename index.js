@@ -1,11 +1,13 @@
 'use strict'
 
 var kill = require('tree-kill')
+var path = require('path')
 var resolve = require('path').resolve
 var exec = require('child_process').exec
 var spawn = require('cross-spawn').spawn
 var chokidar = require('chokidar')
 var arrify = require('arrify')
+var os = require('os')
 var throttle = require('lodash.throttle')
 
 var echo = process.execPath + ' ' + resolve(__dirname, 'echo.js')
@@ -15,7 +17,14 @@ var killRetryDelay = 500
 module.exports = function (match, command, args, opts) {
   opts = opts || {}
 
-  var matches = arrify(match)
+  var matches = arrify(match).map(function(match) {
+    var parts = match.split('/')
+    if (parts[0] === '~') {
+      parts[0] = os.homedir()
+    }
+    return path.resolve(process.cwd(), parts.join('/'))
+  })
+
   var initial = !!opts.initial
   var wait = !!opts.wait
     var cwd = opts.cwd ? resolve(opts.cwd) : process.cwd()
@@ -40,6 +49,7 @@ module.exports = function (match, command, args, opts) {
 
   // Convert arguments to templates
   var tmpls = args ? args.map(tmpl) : []
+  console.log("Matches: " + matches)
   var watcher = chokidar.watch(matches, {
     cwd: cwd,
     ignored: opts.exclude || [],
@@ -67,7 +77,13 @@ module.exports = function (match, command, args, opts) {
         clearTimeout(pendingTimeout)
       }
 
-      cleanstart(pendingOpts)
+      if (delay > 0) {
+        pendingTimeout = setTimeout(function () {
+          cleanstart(pendingOpts)
+        }, delay)
+      } else {
+        cleanstart(pendingOpts)
+      }
     }
   }
 
@@ -94,19 +110,14 @@ module.exports = function (match, command, args, opts) {
       killTask(childOutpipe.pid, killSignal)
     }
 
-    if (killRetry) {
-      if (retryNumber < killRetry) {
-        retryNumber++
-        exitTimeout = setTimeout(function() {
-          if (!pendingExit) return;
-          log("process hasn't exited, retry #" + retryNumber)
+    if (killRetry && retryNumber < killRetry) {
+      retryNumber++
+      exitTimeout = setTimeout(function() {
+        if (!pendingExit) return;
+        log("process hasn't exited, retry #" + retryNumber)
 
-          killTask(retryNumber);
-        }, killRetryDelay * (retryNumber))
-      } else {
-        log('process did not exit after ' + killRetry + ' retries; not restarting.')
-        pendingExit = false
-      }
+        killTask(retryNumber);
+      }, killRetryDelay * (retryNumber))
     }
   }
   /**
