@@ -49,7 +49,7 @@ module.exports = function (match, command, args, opts) {
 
   // Convert arguments to templates
   var tmpls = args ? args.map(tmpl) : []
-  console.log("Matches: " + matches)
+
   var watcher = chokidar.watch(matches, {
     cwd: cwd,
     ignored: opts.exclude || [],
